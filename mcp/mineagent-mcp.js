@@ -104,54 +104,14 @@ const tools = [
   },
   {
     name: "fawe_command",
-    description: "Send a FAWE/WorldEdit command. Accepts commands like //set stone, /pos1, or set stone. Use read_chat afterward for feedback.",
-    inputSchema: {
-      type: "object",
-      properties: { command: { type: "string" } },
-      required: ["command"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "fawe_pos1",
-    description: "Set FAWE/WorldEdit selection position 1 to the current block position.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
-  },
-  {
-    name: "fawe_pos2",
-    description: "Set FAWE/WorldEdit selection position 2 to the current block position.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
-  },
-  {
-    name: "fawe_set",
-    description: "Run //set with the given FAWE/WorldEdit block pattern.",
-    inputSchema: {
-      type: "object",
-      properties: { pattern: { type: "string", description: "Example: stone, oak_planks, 50%stone,50%andesite" } },
-      required: ["pattern"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "fawe_walls",
-    description: "Run //walls with the given FAWE/WorldEdit block pattern.",
-    inputSchema: {
-      type: "object",
-      properties: { pattern: { type: "string" } },
-      required: ["pattern"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "fawe_replace",
-    description: "Run //replace from to for the current FAWE/WorldEdit selection.",
+    description: "Send a FAWE/WorldEdit command (e.g., //set stone, //pos1). Optionally waits for feedback by checking logs.",
     inputSchema: {
       type: "object",
       properties: {
-        from: { type: "string" },
-        to: { type: "string" }
+        command: { type: "string" },
+        waitForFeedback: { type: "boolean", description: "If true, advises to check read_chat for result." }
       },
-      required: ["from", "to"],
+      required: ["command"],
       additionalProperties: false,
     },
   },
@@ -211,12 +171,22 @@ const tools = [
   },
   {
     name: "get_inventory",
-    description: "List non-empty slots in the live Fabric client player's inventory.",
+    description: "List non-empty slots in the live Fabric client player's inventory. Returns a snapshot for polling.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "wait_for_inventory",
+    description: "Poll inventory, returns inventory content with a snapshot timestamp.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
     name: "get_container",
-    description: "List the currently open container menu id, implementation class, and slots.",
+    description: "List the currently open container menu id, implementation class, slots, and title metadata.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "wait_for_container",
+    description: "Poll open container menu, returns slots and title with a snapshot timestamp.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -274,6 +244,27 @@ const tools = [
     },
   },
   {
+    name: "craft_item",
+    description: "Perform crafting in the open crafting menu (supports planks, crafting_table, sticks, wooden_pickaxe, wooden_axe, wooden_shovel).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        recipe: {
+          type: "string",
+          enum: ["planks", "crafting_table", "sticks", "wooden_pickaxe", "wooden_axe", "wooden_shovel"],
+          description: "The recipe name to craft."
+        },
+        count: {
+          type: "integer",
+          minimum: 1,
+          description: "Number of times to craft. Defaults to 1."
+        }
+      },
+      required: ["recipe"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "container_button",
     description: "Send a container button click packet for the current or specified container id.",
     inputSchema: {
@@ -288,7 +279,23 @@ const tools = [
   },
   {
     name: "baritone_status",
-    description: "Check whether Baritone is loaded in the live Fabric client and report the command prefix.",
+    description: "Check whether Baritone is loaded in the live Fabric client, command prefix, and detailed task status.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "get_packet_log",
+    description: "Get the recent network packet logs (inbound/outbound).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        count: { type: "integer", minimum: 1, maximum: 100 }
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_screenshot",
+    description: "Take a screenshot of the client and save to a temporary file, returning the file path.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -314,6 +321,23 @@ const tools = [
       required: ["x", "z"],
       additionalProperties: false,
     },
+  },
+  {
+    name: "run_survival_macro",
+    description: "Start the survival workflow macro: gather wood -> craft planks/table/tools -> build a simple shelter.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        targetLogs: { type: "integer", minimum: 1, description: "Number of logs to gather. Default is 6." },
+        maxWanderDistance: { type: "integer", minimum: 10, description: "Max distance from start position before forcing return. Default is 40." }
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "survival_macro_status",
+    description: "Get the status of the currently running survival macro.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
 ];
 
@@ -450,6 +474,29 @@ async function dispatch(method, params) {
 }
 
 async function callTool(name, args) {
+  if (name === "run_survival_macro") {
+    if (macroState.active) {
+      return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: "Survival macro is already running" }) }] };
+    }
+    macroState.active = true;
+    macroState.step = "GATHERING_WOOD";
+    macroState.message = "Macro started. Gathering wood.";
+    macroState.logsGathered = 0;
+    macroState.targetLogs = args.targetLogs || 6;
+    macroState.maxWanderDistance = args.maxWanderDistance || 40;
+    macroState.startPos = null;
+    macroState.error = null;
+    
+    // Start macro loop asynchronously
+    runMacroLoop();
+    
+    return { content: [{ type: "text", text: JSON.stringify({ ok: true, message: "Survival macro started successfully", state: macroState }) }] };
+  }
+  
+  if (name === "survival_macro_status") {
+    return { content: [{ type: "text", text: JSON.stringify({ ok: true, state: macroState }) }] };
+  }
+
   if (!tools.some((tool) => tool.name === name)) {
     throw new Error(`Unknown tool: ${name}`);
   }
@@ -498,5 +545,340 @@ function write(message) {
     process.stdout.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
   } else {
     process.stdout.write(`${body}\n`);
+  }
+}
+
+let macroState = {
+  active: false,
+  step: "IDLE",
+  message: "",
+  logsGathered: 0,
+  targetLogs: 6,
+  startPos: null,
+  maxWanderDistance: 40,
+  error: null
+};
+
+async function callBridge(name, args) {
+  const response = await fetch(`${BRIDGE_URL}/tool`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      name,
+      arguments: args,
+    }),
+  });
+
+  const text = await response.text();
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = { ok: false, error: text };
+  }
+
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.error || `Bridge returned HTTP ${response.status}`);
+  }
+  return payload.data;
+}
+
+async function runMacroLoop() {
+  while (macroState.active) {
+    try {
+      await tickMacro();
+    } catch (err) {
+      macroState.active = false;
+      macroState.error = err.message || String(err);
+      macroState.message = `Macro failed: ${macroState.error}`;
+      try {
+        await callBridge("stop_all", {});
+      } catch (_) {}
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+}
+
+async function prepareItemInHand(itemName) {
+  const inv = await callBridge("get_inventory", {});
+  if (!inv || !inv.items) return false;
+  
+  let hotbarSlot = -1;
+  let inventorySlot = -1;
+  
+  for (const item of inv.items) {
+    if (item.item === itemName || item.item.endsWith(itemName)) {
+      if (item.slot >= 36 && item.slot <= 44) {
+        hotbarSlot = item.slot - 36;
+      } else {
+        inventorySlot = item.slot;
+      }
+      break;
+    }
+  }
+  
+  if (hotbarSlot !== -1) {
+    await callBridge("select_hotbar_slot", { slot: hotbarSlot });
+    return true;
+  }
+  
+  if (inventorySlot !== -1) {
+    await callBridge("click_slot", { slot: inventorySlot, button: 0, type: "pickup" });
+    await callBridge("click_slot", { slot: 36, button: 0, type: "pickup" });
+    await callBridge("click_slot", { slot: inventorySlot, button: 0, type: "pickup" });
+    await callBridge("select_hotbar_slot", { slot: 0 });
+    return true;
+  }
+  
+  return false;
+}
+
+async function tickMacro() {
+  const status = await callBridge("get_status", {});
+  if (!status || status.message === "client player is not in-world" || status.x === undefined) {
+    macroState.message = "Waiting for player to join world...";
+    return;
+  }
+
+  const inv = await callBridge("get_inventory", {});
+
+  if (macroState.step === "GATHERING_WOOD") {
+    if (!macroState.startPos) {
+      macroState.startPos = { x: status.x, y: status.y, z: status.z };
+      macroState.message = "Starting Baritone mining for wood...";
+      await callBridge("baritone_command", { command: "mine oak_log birch_log spruce_log jungle_log acacia_log dark_oak_log mangrove_log cherry_log pale_oak_log" });
+    }
+
+    let logCount = 0;
+    if (inv && inv.items) {
+      for (const item of inv.items) {
+        if (item.item.endsWith("_log") || item.item.endsWith("_wood") || item.item.endsWith("_stem")) {
+          logCount += item.count;
+        }
+      }
+    }
+    macroState.logsGathered = logCount;
+    macroState.message = `Gathering wood: ${logCount}/${macroState.targetLogs} logs collected.`;
+
+    const dx = status.x - macroState.startPos.x;
+    const dy = status.y - macroState.startPos.y;
+    const dz = status.z - macroState.startPos.z;
+    const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+    if (dist > macroState.maxWanderDistance) {
+      macroState.message = `Safety: player wandered ${Math.round(dist)}m (max ${macroState.maxWanderDistance}m). Stopping wood gather and returning to start.`;
+      await callBridge("stop_all", {});
+      await callBridge("baritone_goto", { x: Math.floor(macroState.startPos.x), z: Math.floor(macroState.startPos.z) });
+      
+      if (logCount >= 1) {
+        macroState.step = "CRAFTING_PLANKS";
+      } else {
+        throw new Error("Wandered too far without gathering any wood");
+      }
+      return;
+    }
+
+    if (logCount >= macroState.targetLogs) {
+      await callBridge("stop_all", {});
+      macroState.step = "CRAFTING_PLANKS";
+      macroState.message = `Wood gathering completed (${logCount} logs). Moving to plank crafting.`;
+    }
+  }
+
+  else if (macroState.step === "CRAFTING_PLANKS") {
+    let logItem = null;
+    if (inv && inv.items) {
+      for (const item of inv.items) {
+        if (item.item.endsWith("_log") || item.item.endsWith("_wood") || item.item.endsWith("_stem")) {
+          logItem = item;
+          break;
+        }
+      }
+    }
+
+    if (logItem) {
+      macroState.message = `Crafting planks from ${logItem.item} (count: ${logItem.count})...`;
+      await callBridge("craft_item", { recipe: "planks", count: logItem.count });
+      await new Promise(r => setTimeout(r, 500));
+    }
+    
+    macroState.step = "CRAFTING_TABLE";
+    macroState.message = "Plank crafting completed. Moving to crafting table crafting.";
+  }
+
+  else if (macroState.step === "CRAFTING_TABLE") {
+    const hasCraftingTable = inv && inv.items && inv.items.some(item => item.item === "minecraft:crafting_table");
+    if (hasCraftingTable) {
+      macroState.step = "CRAFTING_TOOLS";
+      macroState.message = "Crafting table already exists. Moving to crafting tools.";
+      return;
+    }
+
+    let plankCount = 0;
+    if (inv && inv.items) {
+      for (const item of inv.items) {
+        if (item.item.endsWith("_planks")) {
+          plankCount += item.count;
+        }
+      }
+    }
+
+    if (plankCount < 4) {
+      throw new Error(`Not enough planks to craft a crafting table (need 4, have ${plankCount}).`);
+    }
+
+    macroState.message = "Crafting crafting table...";
+    await callBridge("craft_item", { recipe: "crafting_table", count: 1 });
+    await new Promise(r => setTimeout(r, 500));
+    macroState.step = "CRAFTING_TOOLS";
+  }
+
+  else if (macroState.step === "CRAFTING_TOOLS") {
+    let stickCount = 0;
+    if (inv && inv.items) {
+      for (const item of inv.items) {
+        if (item.item === "minecraft:stick") {
+          stickCount += item.count;
+        }
+      }
+    }
+
+    if (stickCount < 4) {
+      macroState.message = "Crafting sticks...";
+      await callBridge("craft_item", { recipe: "sticks", count: 1 });
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    macroState.message = "Placing crafting table...";
+    const success = await prepareItemInHand("minecraft:crafting_table");
+    if (!success) {
+      throw new Error("Could not find crafting table in inventory to place.");
+    }
+
+    const px = Math.floor(status.x);
+    const py = Math.floor(status.y);
+    const pz = Math.floor(status.z);
+
+    let targetX = px + 1;
+    let targetY = py;
+    let targetZ = pz;
+    let targetBlock = await callBridge("get_block", { x: targetX, y: targetY, z: targetZ });
+    
+    if (!targetBlock.block.includes("air")) {
+      targetX = px;
+      targetZ = pz + 1;
+      targetBlock = await callBridge("get_block", { x: targetX, y: targetY, z: targetZ });
+    }
+
+    if (!targetBlock.block.includes("air")) {
+      throw new Error("No clear air space to place crafting table near player.");
+    }
+
+    await callBridge("place_block", { x: targetX, y: targetY, z: targetZ, face: "up" });
+    await new Promise(r => setTimeout(r, 800));
+
+    macroState.message = "Opening crafting table...";
+    await callBridge("look_at", { x: targetX + 0.5, y: targetY + 0.5, z: targetZ + 0.5 });
+    await callBridge("key_signal", { key: "use", action: "pulse", ticks: 2 });
+    await new Promise(r => setTimeout(r, 1000));
+
+    const container = await callBridge("get_container", {});
+    if (!container.title.toLowerCase().includes("crafting")) {
+      throw new Error("Failed to open crafting table interface.");
+    }
+
+    macroState.message = "Crafting wooden pickaxe and axe...";
+    await callBridge("craft_item", { recipe: "wooden_pickaxe", count: 1 });
+    await new Promise(r => setTimeout(r, 500));
+    await callBridge("craft_item", { recipe: "wooden_axe", count: 1 });
+    await new Promise(r => setTimeout(r, 500));
+
+    await callBridge("key_signal", { key: "inventory", action: "pulse", ticks: 2 });
+    await new Promise(r => setTimeout(r, 500));
+
+    macroState.step = "BUILDING_SHELTER";
+  }
+
+  else if (macroState.step === "BUILDING_SHELTER") {
+    macroState.message = "Building shelter...";
+    const px = Math.floor(status.x);
+    const py = Math.floor(status.y);
+    const pz = Math.floor(status.z);
+
+    let plankItemName = null;
+    if (inv && inv.items) {
+      for (const item of inv.items) {
+        if (item.item.endsWith("_planks")) {
+          plankItemName = item.item;
+          break;
+        }
+      }
+    }
+
+    if (!plankItemName) {
+      let logItem = null;
+      if (inv && inv.items) {
+        for (const item of inv.items) {
+          if (item.item.endsWith("_log") || item.item.endsWith("_wood") || item.item.endsWith("_stem")) {
+            logItem = item;
+            break;
+          }
+        }
+      }
+      if (logItem) {
+        await callBridge("craft_item", { recipe: "planks", count: logItem.count });
+        await new Promise(r => setTimeout(r, 500));
+        return;
+      }
+      throw new Error("No planks or logs found to build shelter.");
+    }
+
+    await prepareItemInHand(plankItemName);
+
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        if (dx === 0 && dz === 0) continue;
+        const tx = px + dx;
+        const ty = py;
+        const tz = pz + dz;
+        const block = await callBridge("get_block", { x: tx, y: ty, z: tz });
+        if (block.block.includes("air")) {
+          await callBridge("place_block", { x: tx, y: ty, z: tz, face: "up" });
+          await new Promise(r => setTimeout(r, 250));
+        }
+      }
+    }
+
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        if (dx === 0 && dz === 0) continue;
+        const tx = px + dx;
+        const ty = py + 1;
+        const tz = pz + dz;
+        const block = await callBridge("get_block", { x: tx, y: ty, z: tz });
+        if (block.block.includes("air")) {
+          await callBridge("place_block", { x: tx, y: ty, z: tz, face: "up" });
+          await new Promise(r => setTimeout(r, 250));
+        }
+      }
+    }
+
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const tx = px + dx;
+        const ty = py + 2;
+        const tz = pz + dz;
+        const block = await callBridge("get_block", { x: tx, y: ty, z: tz });
+        if (block.block.includes("air")) {
+          await callBridge("place_block", { x: tx, y: ty, z: tz, face: "up" });
+          await new Promise(r => setTimeout(r, 250));
+        }
+      }
+    }
+
+    macroState.active = false;
+    macroState.step = "COMPLETED";
+    macroState.message = "Shelter built. Survival macro completed successfully!";
   }
 }

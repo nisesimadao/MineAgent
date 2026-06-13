@@ -25,6 +25,21 @@ final class MineAgentTools {
 
     static CompletableFuture<JsonObject> execute(String name, JsonObject args) {
         Minecraft client = Minecraft.getInstance();
+        if ("get_screenshot".equals(name)) {
+            CompletableFuture<JsonObject> future = new CompletableFuture<>();
+            client.execute(() -> {
+                try {
+                    getScreenshotAsync(client, future);
+                } catch (Throwable t) {
+                    JsonObject error = new JsonObject();
+                    error.addProperty("ok", false);
+                    error.addProperty("error", t.getMessage() == null ? t.toString() : t.getMessage());
+                    future.complete(error);
+                }
+            });
+            return future;
+        }
+
         CompletableFuture<JsonObject> future = new CompletableFuture<>();
         client.execute(() -> {
             try {
@@ -52,9 +67,11 @@ final class MineAgentTools {
             case "baritone_stop" -> baritoneStop(client);
             case "stop_all" -> stopAll(client);
             case "read_chat" -> readChat(args);
+            case "fawe_feedback" -> faweFeedback(client, args);
             case "fawe_command" -> faweCommand(client, args);
             case "fawe_pos1" -> faweFixedCommand(client, "/pos1");
             case "fawe_pos2" -> faweFixedCommand(client, "/pos2");
+            case "fawe_pos_select" -> fawePosSelect(client, args);
             case "fawe_set" -> faweSet(client, args);
             case "fawe_walls" -> faweWalls(client, args);
             case "fawe_replace" -> faweReplace(client, args);
@@ -65,16 +82,50 @@ final class MineAgentTools {
             case "get_block" -> getBlock(client, args);
             case "place_block" -> placeBlock(client, args);
             case "get_inventory" -> getInventory(client);
+            case "wait_for_inventory" -> getInventory(client);
             case "get_container" -> getContainer(client);
+            case "wait_for_container" -> getContainer(client);
             case "click_slot" -> clickSlot(client, args);
             case "container_click" -> containerClick(client, args);
             case "click_slot_by_item" -> clickSlotByItem(client, args);
+            case "craft_item" -> craftItem(client, args);
             case "container_button" -> containerButton(client, args);
             case "baritone_status" -> baritoneStatus();
             case "baritone_command" -> baritoneCommand(client, args);
             case "baritone_goto" -> baritoneGoto(client, args);
+            case "get_packet_log" -> getPacketLog(args);
             default -> fail("unknown tool: " + name);
         };
+    }
+
+    private static void getScreenshotAsync(Minecraft client, CompletableFuture<JsonObject> future) {
+        try {
+            java.io.File file = java.io.File.createTempFile("mineagent_screenshot_", ".png");
+            net.minecraft.client.Screenshot.takeScreenshot(
+                client.getMainRenderTarget(),
+                (image) -> {
+                    try {
+                        image.writeToFile(file.toPath());
+                        JsonObject data = new JsonObject();
+                        data.addProperty("path", file.getAbsolutePath());
+                        future.complete(ok("screenshot saved", data));
+                    } catch (Exception e) {
+                        future.complete(fail("Failed to save screenshot: " + e.getMessage()));
+                    } finally {
+                        image.close();
+                    }
+                }
+            );
+        } catch (Exception e) {
+            future.complete(fail("Failed to take screenshot: " + e.getMessage()));
+        }
+    }
+
+    private static JsonObject getPacketLog(JsonObject args) {
+        int count = JsonHttp.integer(args, "count", 20);
+        JsonObject data = new JsonObject();
+        data.add("packets", PacketLog.recent(count));
+        return ok("packet log collected", data);
     }
 
     private static JsonObject getStatus(Minecraft client) {
@@ -243,12 +294,52 @@ final class MineAgentTools {
         return ok("chat messages collected", data);
     }
 
-    private static JsonObject faweCommand(Minecraft client, JsonObject args) {
+    private static JsonObject faweFeedback(Minecraft client, JsonObject args) {
         String command = JsonHttp.string(args, "command", "");
         if (command.isBlank()) {
             return fail("command is required");
         }
-        return sendFaweCommand(client, normalizeFaweCommand(command));
+        
+        // 送信直前の時刻を記録（もしくは現在のチャットサイズを保存）
+        int initialSize = ChatLog.size();
+        
+        JsonObject result = sendFaweCommand(client, command);
+        if (!result.get("ok").getAsBoolean()) {
+            return result;
+        }
+        
+        // 簡易的なフィードバック待機（本来は数ミリ秒待つべきだが、非同期ツールのためここでは送信成功のみ返す）
+        JsonObject data = result.getAsJsonObject("data");
+        data.addProperty("waitNote", "Wait a moment and call read_chat to see the result.");
+        return ok("command sent for feedback", data);
+    }
+
+    private static JsonObject fawePosSelect(Minecraft client, JsonObject args) {
+        int x = JsonHttp.integer(args, "x", 0);
+        int y = JsonHttp.integer(args, "y", 0);
+        int z = JsonHttp.integer(args, "z", 0);
+        int pos = JsonHttp.integer(args, "pos", 1);
+        return sendFaweCommand(client, "/pos" + pos + " " + x + " " + y + " " + z);
+    }
+
+    private static JsonObject faweCommand(Minecraft client, JsonObject args) {
+        String command = JsonHttp.string(args, "command", "");
+        boolean waitForFeedback = JsonHttp.bool(args, "waitForFeedback", false);
+
+        if (command.isBlank()) {
+            return fail("command is required");
+        }
+
+        JsonObject result = sendFaweCommand(client, command);
+        if (!result.get("ok").getAsBoolean()) {
+            return result;
+        }
+
+        if (waitForFeedback) {
+            JsonObject data = result.getAsJsonObject("data");
+            data.addProperty("waitNote", "Command sent. Call read_chat to verify result.");
+        }
+        return result;
     }
 
     private static JsonObject faweFixedCommand(Minecraft client, String command) {
@@ -409,6 +500,7 @@ final class MineAgentTools {
         }
         data.add("items", items);
         data.addProperty("selectedSlot", player.getInventory().getSelectedSlot());
+        data.addProperty("snapshot", System.currentTimeMillis());
         return ok("inventory collected", data);
     }
 
@@ -421,6 +513,14 @@ final class MineAgentTools {
         JsonObject data = new JsonObject();
         data.addProperty("containerId", player.containerMenu.containerId);
         data.addProperty("menuClass", player.containerMenu.getClass().getName());
+        String title = "";
+        if (client.screen != null) {
+            title = client.screen.getTitle().getString();
+        } else {
+            title = player.containerMenu.getClass().getSimpleName();
+        }
+        data.addProperty("title", title);
+        data.addProperty("snapshot", System.currentTimeMillis());
         JsonArray slots = new JsonArray();
         for (int i = 0; i < player.containerMenu.slots.size(); i++) {
             ItemStack stack = player.containerMenu.slots.get(i).getItem();
@@ -467,6 +567,157 @@ final class MineAgentTools {
 
     private static JsonObject containerClick(Minecraft client, JsonObject args) {
         return clickSlot(client, args);
+    }
+
+    private static JsonObject craftItem(Minecraft client, JsonObject args) {
+        LocalPlayer player = client.player;
+        if (player == null) {
+            return fail("client player is not in-world");
+        }
+
+        net.minecraft.world.inventory.AbstractContainerMenu menu = player.containerMenu;
+        boolean isCraftingMenu = menu instanceof net.minecraft.world.inventory.CraftingMenu;
+        boolean isInventoryMenu = menu instanceof net.minecraft.world.inventory.InventoryMenu;
+
+        if (!isCraftingMenu && !isInventoryMenu) {
+            return fail("Neither crafting table menu nor inventory menu is open");
+        }
+
+        String recipe = JsonHttp.string(args, "recipe", "");
+        int count = Math.max(1, JsonHttp.integer(args, "count", 1));
+
+        int startInventorySlot = isCraftingMenu ? 10 : 9;
+        int endInventorySlot = isCraftingMenu ? 45 : 44;
+
+        try {
+            for (int i = 0; i < count; i++) {
+                performCraftingRecipe(client, menu, recipe, isCraftingMenu, startInventorySlot, endInventorySlot);
+            }
+            return ok("Crafted " + count + " " + recipe + " successfully");
+        } catch (Exception e) {
+            return fail("Crafting failed: " + e.getMessage());
+        }
+    }
+
+    private static void performCraftingRecipe(
+        Minecraft client,
+        net.minecraft.world.inventory.AbstractContainerMenu menu,
+        String recipe,
+        boolean isCraftingMenu,
+        int startInventorySlot,
+        int endInventorySlot
+    ) throws Exception {
+        String[] materialSuffixes;
+        int[][] gridSlotsList;
+
+        if ("planks".equals(recipe)) {
+            materialSuffixes = new String[]{"_log", "_wood", "_stem"};
+            gridSlotsList = new int[][]{ {1} };
+        } else if ("crafting_table".equals(recipe)) {
+            materialSuffixes = new String[]{"_planks"};
+            gridSlotsList = new int[][]{
+                isCraftingMenu ? new int[]{1, 2, 4, 5} : new int[]{1, 2, 3, 4}
+            };
+        } else if ("sticks".equals(recipe)) {
+            materialSuffixes = new String[]{"_planks"};
+            gridSlotsList = new int[][]{
+                isCraftingMenu ? new int[]{1, 4} : new int[]{1, 3}
+            };
+        } else if ("wooden_pickaxe".equals(recipe)) {
+            if (!isCraftingMenu) {
+                throw new Exception("wooden_pickaxe requires a crafting table");
+            }
+            materialSuffixes = new String[]{"_planks", "minecraft:stick"};
+            gridSlotsList = new int[][]{
+                {1, 2, 3},
+                {5, 8}
+            };
+        } else if ("wooden_axe".equals(recipe)) {
+            if (!isCraftingMenu) {
+                throw new Exception("wooden_axe requires a crafting table");
+            }
+            materialSuffixes = new String[]{"_planks", "minecraft:stick"};
+            gridSlotsList = new int[][]{
+                {1, 2, 4},
+                {5, 8}
+            };
+        } else if ("wooden_shovel".equals(recipe)) {
+            if (!isCraftingMenu) {
+                throw new Exception("wooden_shovel requires a crafting table");
+            }
+            materialSuffixes = new String[]{"_planks", "minecraft:stick"};
+            gridSlotsList = new int[][]{
+                {2},
+                {5, 8}
+            };
+        } else {
+            throw new Exception("Unknown recipe: " + recipe);
+        }
+
+        for (int m = 0; m < materialSuffixes.length; m++) {
+            String suffix = materialSuffixes[m];
+            int[] slots = gridSlotsList[m];
+            int slotsNeeded = slots.length;
+            int currentGridIndex = 0;
+
+            while (currentGridIndex < slotsNeeded) {
+                int materialSlot = -1;
+                if (suffix.contains(":") || suffix.startsWith("minecraft:")) {
+                    materialSlot = findItemSlot(menu, suffix, startInventorySlot, endInventorySlot, false);
+                } else {
+                    materialSlot = findItemSlot(menu, suffix, startInventorySlot, endInventorySlot, true);
+                }
+
+                if (materialSlot == -1) {
+                    throw new Exception("Missing material for recipe " + recipe + " (searched for " + suffix + ")");
+                }
+
+                click(client, materialSlot, 0, ContainerInput.PICKUP);
+
+                ItemStack carried = menu.getCarried();
+                int countCarried = carried.getCount();
+
+                if (countCarried == 0) {
+                    throw new Exception("Failed to pick up item from slot " + materialSlot);
+                }
+
+                while (countCarried > 0 && currentGridIndex < slotsNeeded) {
+                    int targetGridSlot = slots[currentGridIndex];
+                    click(client, targetGridSlot, 1, ContainerInput.PICKUP);
+                    countCarried--;
+                    currentGridIndex++;
+                }
+
+                if (countCarried > 0) {
+                    click(client, materialSlot, 0, ContainerInput.PICKUP);
+                }
+            }
+        }
+
+        click(client, 0, 0, ContainerInput.QUICK_MOVE);
+    }
+
+    private static int findItemSlot(net.minecraft.world.inventory.AbstractContainerMenu menu, String query, int startSlot, int endSlot, boolean isSuffix) {
+        for (int i = startSlot; i <= endSlot; i++) {
+            ItemStack stack = menu.slots.get(i).getItem();
+            if (!stack.isEmpty()) {
+                String itemId = stack.getItem().toString();
+                if (isSuffix) {
+                    if (itemId.endsWith(query)) {
+                        return i;
+                    }
+                } else {
+                    if (itemId.equals(query)) {
+                        return i;
+                    }
+                }
+            }
+        }
+        return -1;
+    }
+
+    private static void click(Minecraft client, int slot, int button, ContainerInput type) {
+        client.gameMode.handleContainerInput(client.player.containerMenu.containerId, slot, button, type, client.player);
     }
 
     private static JsonObject clickSlotByItem(Minecraft client, JsonObject args) {
@@ -572,11 +823,36 @@ final class MineAgentTools {
 
     private static JsonObject baritoneStatus() {
         JsonObject data = new JsonObject();
-        data.addProperty("loaded", isBaritoneAvailable());
+        boolean available = isBaritoneAvailable();
+        data.addProperty("loaded", available);
         data.addProperty("fabricModIdLoaded", FabricLoader.getInstance().isModLoaded("baritone"));
         data.addProperty("meteorModIdLoaded", FabricLoader.getInstance().isModLoaded("baritone-meteor"));
         data.addProperty("apiClassPresent", isClassPresent("baritone.api.BaritoneAPI"));
         data.addProperty("commandPrefix", "#");
+
+        if (available) {
+            try {
+                Class<?> apiClass = Class.forName("baritone.api.BaritoneAPI");
+                Object provider = apiClass.getMethod("getProvider").invoke(null);
+                Object baritone = provider.getClass().getMethod("getPrimaryBaritone").invoke(provider);
+                if (baritone != null) {
+                    Object pathingBehavior = baritone.getClass().getMethod("getPathingBehavior").invoke(baritone);
+                    Object mineProcess = baritone.getClass().getMethod("getMineProcess").invoke(baritone);
+                    Object followProcess = baritone.getClass().getMethod("getFollowProcess").invoke(baritone);
+
+                    boolean isPathing = (boolean) pathingBehavior.getClass().getMethod("isPathing").invoke(pathingBehavior);
+                    boolean isMining = (boolean) mineProcess.getClass().getMethod("isActive").invoke(mineProcess);
+                    boolean isFollow = (boolean) followProcess.getClass().getMethod("isActive").invoke(followProcess);
+
+                    data.addProperty("isActive", isPathing || isMining);
+                    data.addProperty("isPathing", isPathing);
+                    data.addProperty("isMining", isMining);
+                    data.addProperty("isFollow", isFollow);
+                }
+            } catch (Throwable t) {
+                data.addProperty("error", "Failed to get detailed Baritone status: " + t.getMessage());
+            }
+        }
         return ok("baritone status collected", data);
     }
 

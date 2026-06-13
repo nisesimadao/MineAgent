@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "mineagent",
+  "version": "${version}",
+  "name": "MineAgent",
+  "description": "Trusted local Minecraft client automation agent MVP.",
+  "authors": ["opevista", "OpenAI Codex"],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "jp.opevista.mineagent.MineAgentClient"
+    ]
+  },
+  "mixins": [
+    {
+      "config": "mineagent.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": "~26.1.2",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "required": false,
+  "package": "jp.opevista.mineagent.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "ConnectionMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 0
+  }
+}

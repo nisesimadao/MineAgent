@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "mineagent",
+  "version": "${version}",
+  "name": "MineAgent",
+  "description": "Local MCP bridge for controlling the live Minecraft Java Fabric client.",
+  "authors": ["opevista", "OpenAI Codex"],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "jp.opevista.mineagent.MineAgentClient"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": "~26.1.2",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}

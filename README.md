@@ -13,7 +13,7 @@ This avoids the Mineflayer protocol-version problem by running commands inside t
 The mod jar is written to:
 
 ```text
-build/libs/mineagent-0.1.0.jar
+build/libs/mineagent-0.2.0.jar
 ```
 
 ## Use
@@ -50,6 +50,7 @@ Then restart Codex.
 - `fawe_command`
 - `fawe_pos1`
 - `fawe_pos2`
+- `fawe_pos_select`
 - `fawe_set`
 - `fawe_walls`
 - `fawe_replace`
@@ -60,17 +61,26 @@ Then restart Codex.
 - `get_block`
 - `place_block`
 - `get_inventory`
+- `wait_for_inventory`
 - `get_container`
+- `wait_for_container`
 - `click_slot`
 - `container_click`
 - `click_slot_by_item`
+- `craft_item`
 - `container_button`
 - `baritone_status`
 - `baritone_command`
 - `baritone_goto`
+- `get_packet_log`
+- `get_screenshot`
+- `run_survival_macro`
+- `survival_macro_status`
 
-For the first reliable building workflow, use `run_command` with vanilla commands such as `fill` and `setblock`.
+For survival gameplay, prefer the physical tools (`look_at`, `key_signal`, `place_block`, `craft_item`, Baritone wrappers, and the wait helpers). Keep `run_command` for explicit testing/admin work.
 
 If Baritone is installed in the same Fabric client, use `baritone_command` for commands such as `goto`, `mine`, `follow`, and `stop`. The `#` prefix is added automatically.
 
 If FAWE or WorldEdit is available on the server, use the `fawe_*` tools for selection edits. Follow with `read_chat` to inspect command success or error feedback.
+
+`wait_for_inventory` and `wait_for_container` run on the MCP side and poll the live client until a simple item/title condition is met or the timeout expires. Timeout results return `ok:false` with the last observed snapshot so an agent can decide what to do next.

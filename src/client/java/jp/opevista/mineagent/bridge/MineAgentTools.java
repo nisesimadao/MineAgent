@@ -67,7 +67,6 @@ final class MineAgentTools {
             case "baritone_stop" -> baritoneStop(client);
             case "stop_all" -> stopAll(client);
             case "read_chat" -> readChat(args);
-            case "fawe_feedback" -> faweFeedback(client, args);
             case "fawe_command" -> faweCommand(client, args);
             case "fawe_pos1" -> faweFixedCommand(client, "/pos1");
             case "fawe_pos2" -> faweFixedCommand(client, "/pos2");
@@ -293,27 +292,6 @@ final class MineAgentTools {
         data.addProperty("stored", ChatLog.size());
         return ok("chat messages collected", data);
     }
-
-    private static JsonObject faweFeedback(Minecraft client, JsonObject args) {
-        String command = JsonHttp.string(args, "command", "");
-        if (command.isBlank()) {
-            return fail("command is required");
-        }
-        
-        // 送信直前の時刻を記録（もしくは現在のチャットサイズを保存）
-        int initialSize = ChatLog.size();
-        
-        JsonObject result = sendFaweCommand(client, command);
-        if (!result.get("ok").getAsBoolean()) {
-            return result;
-        }
-        
-        // 簡易的なフィードバック待機（本来は数ミリ秒待つべきだが、非同期ツールのためここでは送信成功のみ返す）
-        JsonObject data = result.getAsJsonObject("data");
-        data.addProperty("waitNote", "Wait a moment and call read_chat to see the result.");
-        return ok("command sent for feedback", data);
-    }
-
     private static JsonObject fawePosSelect(Minecraft client, JsonObject args) {
         int x = JsonHttp.integer(args, "x", 0);
         int y = JsonHttp.integer(args, "y", 0);
@@ -376,12 +354,7 @@ final class MineAgentTools {
         if (player == null) {
             return fail("client player is not in-world");
         }
-        String normalized = command;
-        if (normalized.startsWith("//")) {
-            normalized = normalized.substring(1);
-        } else if (!normalized.startsWith("/")) {
-            normalized = "/" + normalized;
-        }
+        String normalized = normalizeFaweCommand(command);
         player.connection.sendCommand(normalized);
 
         JsonObject data = new JsonObject();
@@ -392,7 +365,10 @@ final class MineAgentTools {
 
     private static String normalizeFaweCommand(String command) {
         String trimmed = command.trim();
-        if (trimmed.startsWith("//") || trimmed.startsWith("/")) {
+        if (trimmed.startsWith("//")) {
+            return trimmed.substring(1);
+        }
+        if (trimmed.startsWith("/")) {
             return trimmed;
         }
         return "/" + trimmed;

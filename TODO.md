@@ -35,6 +35,8 @@
 - [ ] Custom payload send/read helpers if needed for plugin workflows.
 - [x] Screenshot from Minecraft client window or framebuffer.
 - [x] Task macro: gather wood -> craft -> build shelter.
+- [x] MCP-side conditional waits for inventory/container state.
+- [x] Survival macro hotbar/container slot mapping cleanup.
 
 ## Design notes
 

@@ -176,8 +176,17 @@ const tools = [
   },
   {
     name: "wait_for_inventory",
-    description: "Poll inventory, returns inventory content with a snapshot timestamp.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    description: "Poll inventory until an optional item query/count condition is met, then return the latest inventory snapshot.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Matches item id substring, for example _log or minecraft:oak_planks." },
+        minCount: { type: "integer", minimum: 1, description: "Minimum total matching item count. Defaults to 1 when query is set." },
+        timeoutMs: { type: "integer", minimum: 100, maximum: 30000 },
+        intervalMs: { type: "integer", minimum: 50, maximum: 5000 }
+      },
+      additionalProperties: false,
+    },
   },
   {
     name: "get_container",
@@ -186,8 +195,17 @@ const tools = [
   },
   {
     name: "wait_for_container",
-    description: "Poll open container menu, returns slots and title with a snapshot timestamp.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    description: "Poll the open container until an optional title or item query condition is met, then return the latest container snapshot.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Substring that must appear in the open screen title." },
+        query: { type: "string", description: "Matches slot item id, hover name, or display name." },
+        timeoutMs: { type: "integer", minimum: 100, maximum: 30000 },
+        intervalMs: { type: "integer", minimum: 50, maximum: 5000 }
+      },
+      additionalProperties: false,
+    },
   },
   {
     name: "click_slot",
@@ -476,7 +494,7 @@ async function dispatch(method, params) {
 async function callTool(name, args) {
   if (name === "run_survival_macro") {
     if (macroState.active) {
-      return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: "Survival macro is already running" }) }] };
+      return toolResult({ ok: false, error: "Survival macro is already running" });
     }
     macroState.active = true;
     macroState.step = "GATHERING_WOOD";
@@ -487,47 +505,31 @@ async function callTool(name, args) {
     macroState.startPos = null;
     macroState.error = null;
     
-    // Start macro loop asynchronously
     runMacroLoop();
     
-    return { content: [{ type: "text", text: JSON.stringify({ ok: true, message: "Survival macro started successfully", state: macroState }) }] };
+    return toolResult({ ok: true, message: "Survival macro started successfully", state: macroState });
   }
   
   if (name === "survival_macro_status") {
-    return { content: [{ type: "text", text: JSON.stringify({ ok: true, state: macroState }) }] };
+    return toolResult({ ok: true, state: macroState });
+  }
+
+  if (name === "wait_for_inventory") {
+    return toolResult(await waitForInventory(args));
+  }
+
+  if (name === "wait_for_container") {
+    return toolResult(await waitForContainer(args));
   }
 
   if (!tools.some((tool) => tool.name === name)) {
     throw new Error(`Unknown tool: ${name}`);
   }
 
-  const response = await fetch(`${BRIDGE_URL}/tool`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      name,
-      arguments: args,
-    }),
-  });
+  return toolResult(await callBridgePayload(name, args));
+}
 
-  const text = await response.text();
-
-  let payload;
-  try {
-    payload = JSON.parse(text);
-  } catch {
-    payload = {
-      ok: false,
-      error: text,
-    };
-  }
-
-  if (!response.ok || payload.ok === false) {
-    throw new Error(payload.error || `MineAgent bridge returned HTTP ${response.status}`);
-  }
-
+function toolResult(payload) {
   return {
     content: [
       {
@@ -559,7 +561,7 @@ let macroState = {
   error: null
 };
 
-async function callBridge(name, args) {
+async function callBridgePayload(name, args) {
   const response = await fetch(`${BRIDGE_URL}/tool`, {
     method: "POST",
     headers: {
@@ -580,9 +582,108 @@ async function callBridge(name, args) {
   }
 
   if (!response.ok || payload.ok === false) {
-    throw new Error(payload.error || `Bridge returned HTTP ${response.status}`);
+    throw new Error(payload.error || `MineAgent bridge returned HTTP ${response.status}`);
   }
+  return payload;
+}
+
+async function callBridge(name, args) {
+  const payload = await callBridgePayload(name, args);
   return payload.data;
+}
+
+async function waitForInventory(args) {
+  const query = normalizeQuery(args.query || "");
+  const minCount = Math.max(1, Number(args.minCount || 1));
+  const timeoutMs = clampNumber(args.timeoutMs, 100, 30000, 5000);
+  const intervalMs = clampNumber(args.intervalMs, 50, 5000, 250);
+  const deadline = Date.now() + timeoutMs;
+  let lastPayload = null;
+
+  do {
+    lastPayload = await callBridgePayload("get_inventory", {});
+    const data = lastPayload.data || {};
+    if (!query || countMatchingInventoryItems(data.items || [], query) >= minCount) {
+      data.waitMatched = true;
+      data.waitQuery = query;
+      data.waitMinCount = query ? minCount : 0;
+      return lastPayload;
+    }
+    await sleep(intervalMs);
+  } while (Date.now() < deadline);
+
+  const data = lastPayload?.data || {};
+  data.waitMatched = false;
+  data.waitQuery = query;
+  data.waitMinCount = minCount;
+  return {
+    ok: false,
+    error: `Timed out waiting for inventory${query ? ` query "${query}"` : ""}`,
+    data,
+  };
+}
+
+async function waitForContainer(args) {
+  const title = normalizeQuery(args.title || "");
+  const query = normalizeQuery(args.query || "");
+  const timeoutMs = clampNumber(args.timeoutMs, 100, 30000, 5000);
+  const intervalMs = clampNumber(args.intervalMs, 50, 5000, 250);
+  const deadline = Date.now() + timeoutMs;
+  let lastPayload = null;
+
+  do {
+    lastPayload = await callBridgePayload("get_container", {});
+    const data = lastPayload.data || {};
+    const titleMatched = !title || normalizeQuery(data.title || "").includes(title);
+    const itemMatched = !query || (data.slots || []).some((slot) => slotMatches(slot, query));
+    if (titleMatched && itemMatched) {
+      data.waitMatched = true;
+      data.waitTitle = title;
+      data.waitQuery = query;
+      return lastPayload;
+    }
+    await sleep(intervalMs);
+  } while (Date.now() < deadline);
+
+  const data = lastPayload?.data || {};
+  data.waitMatched = false;
+  data.waitTitle = title;
+  data.waitQuery = query;
+  return {
+    ok: false,
+    error: "Timed out waiting for container condition",
+    data,
+  };
+}
+
+function countMatchingInventoryItems(items, query) {
+  return items.reduce((total, item) => {
+    return itemMatches(item, query) ? total + Number(item.count || 0) : total;
+  }, 0);
+}
+
+function slotMatches(slot, query) {
+  return itemMatches(slot, query)
+    || normalizeQuery(slot.hoverName || "").includes(query)
+    || normalizeQuery(slot.displayName || "").includes(query);
+}
+
+function itemMatches(item, query) {
+  return normalizeQuery(item.item || "").includes(query);
+}
+
+function normalizeQuery(value) {
+  return String(value).trim().toLowerCase();
+}
+
+function clampNumber(value, min, max, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function runMacroLoop() {
@@ -606,14 +707,14 @@ async function prepareItemInHand(itemName) {
   if (!inv || !inv.items) return false;
   
   let hotbarSlot = -1;
-  let inventorySlot = -1;
+  let containerSlot = -1;
   
   for (const item of inv.items) {
     if (item.item === itemName || item.item.endsWith(itemName)) {
-      if (item.slot >= 36 && item.slot <= 44) {
-        hotbarSlot = item.slot - 36;
+      if (item.slot >= 0 && item.slot <= 8) {
+        hotbarSlot = item.slot;
       } else {
-        inventorySlot = item.slot;
+        containerSlot = inventorySlotToMenuSlot(item.slot);
       }
       break;
     }
@@ -624,15 +725,21 @@ async function prepareItemInHand(itemName) {
     return true;
   }
   
-  if (inventorySlot !== -1) {
-    await callBridge("click_slot", { slot: inventorySlot, button: 0, type: "pickup" });
+  if (containerSlot !== -1) {
+    await callBridge("click_slot", { slot: containerSlot, button: 0, type: "pickup" });
     await callBridge("click_slot", { slot: 36, button: 0, type: "pickup" });
-    await callBridge("click_slot", { slot: inventorySlot, button: 0, type: "pickup" });
+    await callBridge("click_slot", { slot: containerSlot, button: 0, type: "pickup" });
     await callBridge("select_hotbar_slot", { slot: 0 });
     return true;
   }
   
   return false;
+}
+
+function inventorySlotToMenuSlot(slot) {
+  if (slot >= 0 && slot <= 8) return slot + 36;
+  if (slot >= 9 && slot <= 35) return slot;
+  return -1;
 }
 
 async function tickMacro() {

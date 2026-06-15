@@ -1,6 +1,7 @@
 package jp.opevista.mineagent.bridge;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
@@ -80,6 +81,7 @@ final class MineAgentTools {
             case "jump" -> jump(client);
             case "get_block" -> getBlock(client, args);
             case "place_block" -> placeBlock(client, args);
+            case "place_sign" -> placeSign(client, args);
             case "get_inventory" -> getInventory(client);
             case "wait_for_inventory" -> getInventory(client);
             case "get_container" -> getContainer(client);
@@ -92,6 +94,9 @@ final class MineAgentTools {
             case "baritone_status" -> baritoneStatus();
             case "baritone_command" -> baritoneCommand(client, args);
             case "baritone_goto" -> baritoneGoto(client, args);
+            case "combat_set" -> combatSet(client, args);
+            case "combat_status" -> combatStatus(client);
+            case "combat_stop" -> combatStop(client);
             case "get_packet_log" -> getPacketLog(args);
             default -> fail("unknown tool: " + name);
         };
@@ -271,6 +276,7 @@ final class MineAgentTools {
 
     private static JsonObject stopAll(Minecraft client) {
         KeyPulse.clearAndRelease(client);
+        CombatMode.stop(client);
         LocalPlayer player = client.player;
         boolean baritoneStopSent = false;
         if (player != null && isBaritoneAvailable()) {
@@ -280,7 +286,20 @@ final class MineAgentTools {
         JsonObject data = new JsonObject();
         data.addProperty("keysReleased", true);
         data.addProperty("baritoneStopSent", baritoneStopSent);
+        data.add("combat", CombatMode.status(client));
         return ok("stop all completed", data);
+    }
+
+    private static JsonObject combatSet(Minecraft client, JsonObject args) {
+        return ok("combat mode updated", CombatMode.configure(client, args));
+    }
+
+    private static JsonObject combatStatus(Minecraft client) {
+        return ok("combat status collected", CombatMode.status(client));
+    }
+
+    private static JsonObject combatStop(Minecraft client) {
+        return ok("combat mode stopped", CombatMode.stop(client));
     }
 
     private static JsonObject readChat(JsonObject args) {
@@ -454,6 +473,121 @@ final class MineAgentTools {
         data.addProperty("face", face.name());
         data.addProperty("selectedSlot", player.getInventory().getSelectedSlot());
         return ok("place block action sent", data);
+    }
+
+    private static JsonObject placeSign(Minecraft client, JsonObject args) {
+        LocalPlayer player = client.player;
+        if (player == null || player.connection == null) {
+            return fail("client player is not in-world");
+        }
+
+        int x = JsonHttp.integer(args, "x", (int) Math.floor(player.getX()));
+        int y = JsonHttp.integer(args, "y", (int) Math.floor(player.getY()));
+        int z = JsonHttp.integer(args, "z", (int) Math.floor(player.getZ()));
+        boolean wall = JsonHttp.bool(args, "wall", false);
+        Direction facing = direction(JsonHttp.string(args, "facing", "south"));
+        int rotation = Math.max(0, Math.min(JsonHttp.integer(args, "rotation", 0), 15));
+        String color = sanitizeIdentifier(JsonHttp.string(args, "color", "black"), "black");
+        boolean glowing = JsonHttp.bool(args, "glowing", false);
+        String block = normalizeSignBlock(JsonHttp.string(args, "material", "oak"), wall);
+        String[] lines = signLines(args);
+
+        String blockState = wall
+                ? block + "[facing=" + facing.getSerializedName() + "]"
+                : block + "[rotation=" + rotation + "]";
+        String command = "setblock " + x + " " + y + " " + z + " " + blockState
+                + "{front_text:{messages:[" + signMessages(lines) + "],color:\"" + color
+                + "\",has_glowing_text:" + (glowing ? "1b" : "0b") + "}} replace";
+        player.connection.sendCommand(command);
+
+        JsonObject data = new JsonObject();
+        data.addProperty("sentCommand", command);
+        data.addProperty("x", x);
+        data.addProperty("y", y);
+        data.addProperty("z", z);
+        data.addProperty("block", blockState);
+        data.addProperty("color", color);
+        data.addProperty("glowing", glowing);
+        JsonArray lineArray = new JsonArray();
+        for (String line : lines) {
+            lineArray.add(line);
+        }
+        data.add("lines", lineArray);
+        data.addProperty("note", "Use read_chat after a short delay to inspect command feedback.");
+        return ok("sign placement command sent", data);
+    }
+
+    private static String[] signLines(JsonObject args) {
+        String[] lines = new String[]{"", "", "", ""};
+        JsonElement lineElement = args.get("lines");
+        if (lineElement != null && lineElement.isJsonArray()) {
+            JsonArray array = lineElement.getAsJsonArray();
+            for (int i = 0; i < Math.min(4, array.size()); i++) {
+                JsonElement value = array.get(i);
+                lines[i] = value != null && value.isJsonPrimitive() ? trimSignLine(value.getAsString()) : "";
+            }
+            return lines;
+        }
+
+        String text = JsonHttp.string(args, "text", "");
+        String[] split = text.split("\\R", -1);
+        for (int i = 0; i < Math.min(4, split.length); i++) {
+            lines[i] = trimSignLine(split[i]);
+        }
+        return lines;
+    }
+
+    private static String signMessages(String[] lines) {
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < 4; i++) {
+            if (i > 0) {
+                builder.append(",");
+            }
+            JsonObject message = new JsonObject();
+            message.addProperty("text", lines[i]);
+            builder.append("\"").append(escapeNbtString(JsonHttp.GSON.toJson(message))).append("\"");
+        }
+        return builder.toString();
+    }
+
+    private static String normalizeSignBlock(String material, boolean wall) {
+        String normalized = sanitizeIdentifier(material, "oak");
+        if (!normalized.contains(":")) {
+            normalized = "minecraft:" + normalized;
+        }
+        if (normalized.endsWith("_wall_sign") || normalized.endsWith("_sign")) {
+            if (wall && normalized.endsWith("_sign") && !normalized.endsWith("_wall_sign")) {
+                return normalized.substring(0, normalized.length() - "_sign".length()) + "_wall_sign";
+            }
+            if (!wall && normalized.endsWith("_wall_sign")) {
+                return normalized.substring(0, normalized.length() - "_wall_sign".length()) + "_sign";
+            }
+            return normalized;
+        }
+        return normalized + (wall ? "_wall_sign" : "_sign");
+    }
+
+    private static String sanitizeIdentifier(String value, String fallback) {
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        if (normalized.isBlank()) {
+            return fallback;
+        }
+        for (int i = 0; i < normalized.length(); i++) {
+            char c = normalized.charAt(i);
+            boolean ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == ':' || c == '.';
+            if (!ok) {
+                return fallback;
+            }
+        }
+        return normalized;
+    }
+
+    private static String trimSignLine(String line) {
+        return line.length() <= 384 ? line : line.substring(0, 384);
+    }
+
+    private static String escapeNbtString(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private static JsonObject getInventory(Minecraft client) {

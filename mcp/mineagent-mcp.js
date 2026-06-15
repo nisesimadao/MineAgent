@@ -170,6 +170,34 @@ const tools = [
     },
   },
   {
+    name: "place_sign",
+    description: "Remotely place a sign at exact coordinates with the specified text. Uses a vanilla setblock command for automation.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        x: { type: "integer" },
+        y: { type: "integer" },
+        z: { type: "integer" },
+        text: { type: "string", description: "Multiline text; up to the first four lines are used." },
+        lines: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          maxItems: 4,
+          description: "Explicit sign lines. Overrides text when provided."
+        },
+        material: { type: "string", description: "Wood type or block id, for example oak, spruce, minecraft:cherry_sign." },
+        wall: { type: "boolean", description: "Place a wall sign instead of a standing sign." },
+        facing: { type: "string", enum: ["north", "south", "east", "west"], description: "Facing for wall signs." },
+        rotation: { type: "integer", minimum: 0, maximum: 15, description: "Rotation for standing signs." },
+        color: { type: "string", description: "Dye color name. Defaults to black." },
+        glowing: { type: "boolean", description: "Enable glowing sign text." }
+      },
+      required: ["x", "y", "z"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "get_inventory",
     description: "List non-empty slots in the live Fabric client player's inventory. Returns a snapshot for polling.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -341,6 +369,34 @@ const tools = [
     },
   },
   {
+    name: "combat_set",
+    description: "Enable or configure MineAgent Combat mode. Intended for private testing/single-player use; it tracks a selected target and attacks on full cooldown while bunny hopping.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        enabled: { type: "boolean", description: "Turn Combat mode on or off." },
+        targetEntityId: { type: "integer", minimum: 0, description: "Specific entity id to attack." },
+        targetName: { type: "string", description: "Substring of an entity/player display name to target." },
+        range: { type: "number", minimum: 2, maximum: 6, description: "Attack range gate. Defaults to 4.2." },
+        includePlayers: { type: "boolean", description: "Allow automatic player targets when no explicit target is set." },
+        bunnyHop: { type: "boolean", description: "Hop while moving toward the target. Defaults to true." },
+        sprintTap: { type: "boolean", description: "Briefly release sprint before an attack. Defaults to true." },
+        autoSelectSword: { type: "boolean", description: "Select the best sword found in the hotbar. Defaults to true." }
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "combat_status",
+    description: "Get Combat mode state and the currently resolved target, if any.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "combat_stop",
+    description: "Disable Combat mode and release the movement keys it controls.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
     name: "run_survival_macro",
     description: "Start the survival workflow macro: gather wood -> craft planks/table/tools -> build a simple shelter.",
     inputSchema: {
@@ -467,7 +523,7 @@ async function dispatch(method, params) {
         },
         serverInfo: {
           name: "mineagent-fabric-mcp",
-          version: "0.1.0",
+          version: "0.2.0",
         },
       };
 

@@ -22,6 +22,7 @@ build/libs/mineagent-0.2.0.jar
 2. Start Minecraft `26.1.2` with Fabric.
 3. Open a world or LAN/server session.
 4. The mod listens on `http://127.0.0.1:17890`.
+5. Open `http://127.0.0.1:17890/` for the Web control panel.
 
 Add this to `C:\Users\opevi\.codex\config.toml`:
 
@@ -60,6 +61,7 @@ Then restart Codex.
 - `select_hotbar_slot`
 - `get_block`
 - `place_block`
+- `place_sign`
 - `get_inventory`
 - `wait_for_inventory`
 - `get_container`
@@ -72,6 +74,9 @@ Then restart Codex.
 - `baritone_status`
 - `baritone_command`
 - `baritone_goto`
+- `combat_set`
+- `combat_status`
+- `combat_stop`
 - `get_packet_log`
 - `get_screenshot`
 - `run_survival_macro`
@@ -84,3 +89,7 @@ If Baritone is installed in the same Fabric client, use `baritone_command` for c
 If FAWE or WorldEdit is available on the server, use the `fawe_*` tools for selection edits. Follow with `read_chat` to inspect command success or error feedback.
 
 `wait_for_inventory` and `wait_for_container` run on the MCP side and poll the live client until a simple item/title condition is met or the timeout expires. Timeout results return `ok:false` with the last observed snapshot so an agent can decide what to do next.
+
+`combat_set` enables an explicit Combat mode for private testing. It can target by entity id or display-name substring, bunny hop toward the target, wait for attack cooldown, attempt falling-window critical hits, sprint tap, and select the best sword in the hotbar. Use `combat_stop` or `stop_all` to disable it.
+
+The Web control panel exposes Combat, stop controls, snapshots, inventory/chat/packet tools, key signals, Baritone, FAWE, remote sign placement, and GUI item clicking without requiring raw JSON input.

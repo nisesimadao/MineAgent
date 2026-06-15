@@ -37,6 +37,9 @@
 - [x] Task macro: gather wood -> craft -> build shelter.
 - [x] MCP-side conditional waits for inventory/container state.
 - [x] Survival macro hotbar/container slot mapping cleanup.
+- [x] Combat mode: MCP on/off, target selection, bunny hop, sprint tap, cooldown attacks.
+- [x] WebGUI for Combat and common tools without raw JSON input.
+- [x] Remote sign placement tool with text, material, facing, color, and glowing options.
 
 ## Design notes
 

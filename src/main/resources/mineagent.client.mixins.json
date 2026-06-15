@@ -3,7 +3,6 @@
   "package": "jp.opevista.mineagent.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
-    "MinecraftMixin",
     "ConnectionMixin"
   ],
   "injectors": {

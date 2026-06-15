@@ -1,5 +1,6 @@
 package jp.opevista.mineagent.mixin;
 
+import io.netty.channel.ChannelHandlerContext;
 import jp.opevista.mineagent.bridge.PacketLog;
 import net.minecraft.network.Connection;
 import net.minecraft.network.protocol.Packet;
@@ -15,8 +16,12 @@ public class ConnectionMixin {
         PacketLog.add("outbound", packet.getClass().getSimpleName());
     }
 
-    @Inject(method = "channelRead0(Lio/netty/channel/ChannelHandlerContext;Lnet/minecraft/network/protocol/Packet;)V", at = @At("HEAD"), remap = false)
-    private void onReceive(Object ctx, Packet<?> packet, CallbackInfo ci) {
+    @Inject(
+            method = "channelRead0(Lio/netty/channel/ChannelHandlerContext;Lnet/minecraft/network/protocol/Packet;)V",
+            at = @At("HEAD"),
+            remap = false
+    )
+    private void onReceive(ChannelHandlerContext ctx, Packet<?> packet, CallbackInfo ci) {
         PacketLog.add("inbound", packet.getClass().getSimpleName());
     }
 }

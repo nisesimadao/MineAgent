@@ -32,6 +32,14 @@ final class JsonHttp {
         exchange.close();
     }
 
+    static void writeText(HttpExchange exchange, int status, String contentType, String body) throws IOException {
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", contentType + "; charset=utf-8");
+        exchange.sendResponseHeaders(status, bytes.length);
+        exchange.getResponseBody().write(bytes);
+        exchange.close();
+    }
+
     static void writeError(HttpExchange exchange, int status, String message) throws IOException {
         JsonObject body = new JsonObject();
         body.addProperty("ok", false);

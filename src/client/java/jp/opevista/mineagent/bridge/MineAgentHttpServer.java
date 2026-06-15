@@ -22,6 +22,7 @@ public final class MineAgentHttpServer {
     public void start() {
         try {
             server = HttpServer.create(new InetSocketAddress(host, port), 0);
+            server.createContext("/", this::handleRoot);
             server.createContext("/health", exchange -> JsonHttp.write(exchange, 200, health()));
             server.createContext("/tool", this::handleTool);
             server.setExecutor(Executors.newCachedThreadPool());
@@ -30,6 +31,19 @@ public final class MineAgentHttpServer {
         } catch (IOException e) {
             System.err.println("[MineAgent] Failed to start HTTP bridge: " + e.getMessage());
         }
+    }
+
+    private void handleRoot(HttpExchange exchange) throws IOException {
+        if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+            JsonHttp.writeError(exchange, 405, "GET required");
+            return;
+        }
+        String path = exchange.getRequestURI().getPath();
+        if (!"/".equals(path) && !"/index.html".equals(path)) {
+            JsonHttp.writeError(exchange, 404, "not found");
+            return;
+        }
+        JsonHttp.writeText(exchange, 200, "text/html", WebUiAssets.html());
     }
 
     private JsonObject health() {
